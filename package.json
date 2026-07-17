@@ -1,0 +1,53 @@
+{
+  "name": "@zgeoff/umami-mcp",
+  "version": "0.1.0",
+  "description": "MCP server exposing Umami analytics (Cloud + self-hosted) via typed read-only tools",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "umami-mcp": "dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc --watch",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "format": "prettier --write src/",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "umami",
+    "analytics"
+  ],
+  "author": "Geoff Whatley <me@geoffwhatley.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/zgeoff/umami-mcp.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@types/node": "22.18.13",
+    "prettier": "3.6.2",
+    "tsx": "4.20.6",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}
