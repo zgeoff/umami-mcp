@@ -1,0 +1,112 @@
+name: main
+
+on:
+  push:
+    branches: [main]
+  # The recovery path: dispatched at a release tag, the run publishes that
+  # tag's version when npm lacks it, and skips the release job.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # A release takes two pushes to main, through the shared release-please job
+  # in zgeoff/tools:
+  # - after a fix: or feat: commit lands, release-please opens or updates the
+  #   release PR (version bump and changelog), which waits for a person to
+  #   merge it.
+  # - the run of that merge's push tags the merge commit, and the publish job
+  #   below publishes it to npm.
+  #
+  # With no release App configured, release-please uses GITHUB_TOKEN, so the
+  # release PR gets no pull_request checks; the publish job runs the build and
+  # tests on the release commit before it publishes.
+  release:
+    if: github.event_name == 'push'
+    permissions:
+      contents: write
+      pull-requests: write
+    uses: zgeoff/tools/.github/workflows/release-please.yml@46b52f288f7390a7912e1a4ad4241ad918964560 # main
+    with:
+      app-id: ${{ vars.RELEASE_APP_ID }}
+      merge: false
+      # The default sync command runs bun, and this repo uses npm.
+      # release-please bumps package-lock.json itself, so the release PR needs
+      # no repair.
+      sync-command: ''
+    secrets:
+      app-private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+  # npm's trusted publisher names this file, so the publish stays in it.
+  # Provenance records this run's commit as the package's source, so the job
+  # publishes only when the release tag points at that commit. A push run
+  # publishes the release it tagged. When a later push tags the release, or a
+  # publish fails after the tag, recover with a run dispatched at the tag:
+  #   gh workflow run main.yml --ref <tag>
+  # A version npm holds already is skipped, so a recovery run is safe.
+  publish:
+    needs: release
+    if: >-
+      ${{ !cancelled() && (needs.release.outputs.releases_created == 'true' ||
+      (github.event_name == 'workflow_dispatch' && startsWith(github.ref, 'refs/tags/'))) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    concurrency:
+      group: publish
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      # Trusted publishing (OIDC). No npm token exists in this repository.
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Check the release tag points at this commit
+        id: release
+        env:
+          TAG: ${{ needs.release.outputs.tag || github.ref_name }}
+        run: |
+          git fetch --no-tags --depth=1 origin "refs/tags/$TAG:refs/tags/$TAG"
+          tagged=$(git rev-parse "$TAG^{commit}")
+          if [ "$tagged" != "$GITHUB_SHA" ]; then
+            echo "::error::$TAG points at $tagged, not this run's commit $GITHUB_SHA. Publish it with: gh workflow run main.yml --ref $TAG"
+            exit 1
+          fi
+          version=$(node -p "require('./package.json').version")
+          case "$TAG" in
+            *v"$version") ;;
+            *)
+              echo "::error::package.json holds $version, which $TAG does not name"
+              exit 1
+              ;;
+          esac
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Trusted publishing needs npm 11.5.1 or later, which Node 24 bundles.
+      # No registry-url: setup-node would then write an .npmrc that expects a
+      # token.
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+      - name: Check the registry for the version
+        id: registry
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          name=$(node -p "require('./package.json').name")
+          if npm view "$name@$VERSION" version >/dev/null 2>&1; then
+            echo "$name@$VERSION is on npm already; skipping the publish"
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Publish
+        if: steps.registry.outputs.publish == 'true'
+        run: npm publish --provenance --access public
